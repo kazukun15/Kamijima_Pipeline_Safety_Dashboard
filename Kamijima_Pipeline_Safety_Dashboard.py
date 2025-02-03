@@ -5,9 +5,17 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 import io
 from reportlab.pdfgen import canvas
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from shapely.geometry import Polygon, LineString
 import tempfile, zipfile
 import os
+
+# ReportLab用に日本語フォントを登録（同じディレクトリに NotoSansCJKjp-Regular.otf が必要）
+try:
+    pdfmetrics.registerFont(TTFont('NotoSansCJKjp', 'NotoSansCJKjp-Regular.otf'))
+except Exception as e:
+    st.error(f"日本語フォントの登録に失敗しました: {e}")
 
 # ----- 1. GISデータの生成（疑似データ：上島町中央付近の広域領域と上下水道管） -----
 @st.cache_data(show_spinner=False)
@@ -157,12 +165,17 @@ def predict_risk(model, input_features):
 
 # ----- 3. PDFレポート生成 -----
 def generate_pdf_report(risk_score):
+    """
+    予測されたリスクスコアを含むPDFレポートを生成する。
+    日本語表示のため、登録した NotoSansCJKjp フォントを使用する。
+    """
     try:
         buffer = io.BytesIO()
         p = canvas.Canvas(buffer)
-        p.setFont("Helvetica-Bold", 16)
+        # フォントを NotoSansCJKjp に設定
+        p.setFont("NotoSansCJKjp", 16)
         p.drawString(100, 800, "上島町パイプライン安全レポート")
-        p.setFont("Helvetica", 12)
+        p.setFont("NotoSansCJKjp", 12)
         p.drawString(100, 780, "所在地：上島町、愛媛県")
         p.drawString(100, 760, f"予測リスクスコア： {risk_score:.2f}")
         p.drawString(100, 740, "注：これはサンプルデータによるテストレポートです。")
@@ -210,12 +223,12 @@ def main():
                     gdf_soil, gdf_pipelines = create_sample_gis_data()
                     folium_map = create_folium_map(gdf_soil, gdf_pipelines)
                 else:
-                    # アップロードデータの場合、デフォルトのスタイルで表示
+                    # アップロードデータの場合は、読み込んだデータをそのまま表示
                     folium_map = folium.Map(location=[34.25782859672118, 133.20487255560406], zoom_start=14)
                     folium.GeoJson(
                         gdf_uploaded,
                         name="アップロードデータ",
-                        tooltip=folium.features.GeoJsonTooltip(fields=list(gdf_uploaded.columns))
+                        tooltip=folium.features.GeoJsonTooltip(fields=list(gdf_uploaded.columns), aliases=["項目："])
                     ).add_to(folium_map)
                     folium.LayerControl().add_to(folium_map)
         st.components.v1.html(folium_map._repr_html_(), height=500)
