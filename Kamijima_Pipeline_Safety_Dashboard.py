@@ -5,75 +5,130 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 import io
 from reportlab.pdfgen import canvas
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, LineString
 
-# ----- 1. GISデータの生成（疑似データ：愛媛県上島町付近） -----
+# ----- 1. GISデータの生成（疑似データ：愛媛県上島町中央付近） -----
 @st.cache_data(show_spinner=False)
 def create_sample_gis_data():
     """
-    上島町付近の疑似ポリゴンを作成し、リスク属性付きのGeoDataFrameを生成する。
+    上島町中央付近に、疑似的な土壌の性質（左右2領域）とパイプライン（中央を横断するライン）を生成する。
     """
-    coords = [
-        (132.495, 33.847),  # 左下
-        (132.505, 33.847),  # 右下
-        (132.505, 33.853),  # 右上
-        (132.495, 33.853)   # 左上
-    ]
-    poly = Polygon(coords)
-    gdf = gpd.GeoDataFrame({'risk': [0.5]}, geometry=[poly], crs="EPSG:4326")
-    return gdf
+    try:
+        # 土壌ポリゴンの作成
+        # 土壌ポリゴン A: 左側（例：Sandy）
+        coords_A = [
+            (132.495, 33.847),  # 左下
+            (132.500, 33.847),  # 右下
+            (132.500, 33.853),  # 右上
+            (132.495, 33.853)   # 左上
+        ]
+        poly_A = Polygon(coords_A)
+        # 土壌ポリゴン B: 右側（例：Clay）
+        coords_B = [
+            (132.500, 33.847),
+            (132.505, 33.847),
+            (132.505, 33.853),
+            (132.500, 33.853)
+        ]
+        poly_B = Polygon(coords_B)
+        # 土壌GeoDataFrameの作成
+        gdf_soil = gpd.GeoDataFrame(
+            {'soil_type': ['Sandy', 'Clay']},
+            geometry=[poly_A, poly_B],
+            crs="EPSG:4326"
+        )
+        # パイプラインの作成：土壌ポリゴンの中央部を横断するライン
+        # ここでは、土壌全体の左端から右端までの水平ラインとする
+        pipeline_coords = [(132.495, 33.85), (132.505, 33.85)]
+        pipeline_line = LineString(pipeline_coords)
+        gdf_pipeline = gpd.GeoDataFrame(
+            {'pipeline': ['Main Pipeline']},
+            geometry=[pipeline_line],
+            crs="EPSG:4326"
+        )
+        return gdf_soil, gdf_pipeline
+    except Exception as e:
+        st.error(f"Error in creating sample GIS data: {e}")
+        raise
 
-def create_folium_map(gdf):
+def create_folium_map(gdf_soil, gdf_pipeline):
     """
-    GeoDataFrameの重心をマップの中心としたFoliumマップを生成する。
+    土壌とパイプラインのGeoDataFrameからFoliumマップを作成する。
     """
-    if not gdf.empty:
-        mean_lat = gdf.geometry.centroid.y.mean()
-        mean_lon = gdf.geometry.centroid.x.mean()
-    else:
-        mean_lat, mean_lon = 33.85, 132.50  # デフォルト値（上島町付近）
-    m = folium.Map(location=[mean_lat, mean_lon], zoom_start=14)
-    folium.GeoJson(gdf, name="Kamijima Area").add_to(m)
-    folium.LayerControl().add_to(m)
-    return m
+    try:
+        # 土壌GeoDataFrameの重心をマップの中心に設定
+        mean_lat = gdf_soil.geometry.centroid.y.mean()
+        mean_lon = gdf_soil.geometry.centroid.x.mean()
+        m = folium.Map(location=[mean_lat, mean_lon], zoom_start=14)
+        
+        # 土壌情報をGeoJsonレイヤーとして追加（土壌種別に応じた色分け）
+        folium.GeoJson(
+            gdf_soil,
+            name="Soil Properties",
+            style_function=lambda feature: {
+                'fillColor': 'green' if feature['properties']['soil_type'] == 'Sandy' else 'brown',
+                'color': 'black',
+                'weight': 1,
+                'fillOpacity': 0.5
+            }
+        ).add_to(m)
+        
+        # パイプライン情報をGeoJsonレイヤーとして追加
+        folium.GeoJson(
+            gdf_pipeline,
+            name="Pipeline",
+            style_function=lambda feature: {
+                'color': 'red',
+                'weight': 3
+            }
+        ).add_to(m)
+        
+        folium.LayerControl().add_to(m)
+        return m
+    except Exception as e:
+        st.error(f"Error in creating Folium map: {e}")
+        raise
 
 # ----- 2. 機械学習モデルによる予測（ダミーデータ） -----
 @st.cache_resource(show_spinner=False)
 def train_dummy_model():
-    """
-    仮の学習データを用いてRandomForestRegressorを学習する。
-    """
-    np.random.seed(42)
-    X_train = np.random.rand(100, 5)
-    y_train = np.random.rand(100)
-    model = RandomForestRegressor()
-    model.fit(X_train, y_train)
-    return model
+    try:
+        np.random.seed(42)
+        X_train = np.random.rand(100, 5)
+        y_train = np.random.rand(100)
+        model = RandomForestRegressor()
+        model.fit(X_train, y_train)
+        return model
+    except Exception as e:
+        st.error(f"Error in training dummy model: {e}")
+        raise
 
 def predict_risk(model, input_features):
-    """
-    入力された特徴量を元にリスクスコアを予測する。
-    """
-    risk_score = model.predict(input_features)
-    return risk_score[0]
+    try:
+        risk_score = model.predict(input_features)
+        return risk_score[0]
+    except Exception as e:
+        st.error(f"Error in predicting risk: {e}")
+        raise
 
 # ----- 3. PDFレポート生成 -----
 def generate_pdf_report(risk_score):
-    """
-    予測されたリスクスコアを含むPDFレポートを生成し、バイナリデータとして返す。
-    """
-    buffer = io.BytesIO()
-    p = canvas.Canvas(buffer)
-    p.setFont("Helvetica-Bold", 16)
-    p.drawString(100, 800, "Kamijima Pipeline Safety Report")
-    p.setFont("Helvetica", 12)
-    p.drawString(100, 780, "Location: Kamijima, Ehime, Japan")
-    p.drawString(100, 760, f"Predicted Risk Score: {risk_score:.2f}")
-    p.drawString(100, 740, "Note: This is a test report using sample data.")
-    p.showPage()
-    p.save()
-    buffer.seek(0)
-    return buffer
+    try:
+        buffer = io.BytesIO()
+        p = canvas.Canvas(buffer)
+        p.setFont("Helvetica-Bold", 16)
+        p.drawString(100, 800, "Kamijima Pipeline Safety Report")
+        p.setFont("Helvetica", 12)
+        p.drawString(100, 780, "Location: Kamijima, Ehime, Japan")
+        p.drawString(100, 760, f"Predicted Risk Score: {risk_score:.2f}")
+        p.drawString(100, 740, "Note: This is a test report using sample data.")
+        p.showPage()
+        p.save()
+        buffer.seek(0)
+        return buffer
+    except Exception as e:
+        st.error(f"Error in generating PDF report: {e}")
+        raise
 
 # ----- 4. Streamlitアプリ本体 -----
 def main():
@@ -91,13 +146,13 @@ def main():
     st.header("GIS Visualization (Kamijima Area)")
     try:
         with st.spinner("Generating GIS data..."):
-            gdf = create_sample_gis_data()
-            folium_map = create_folium_map(gdf)
+            gdf_soil, gdf_pipeline = create_sample_gis_data()
+            folium_map = create_folium_map(gdf_soil, gdf_pipeline)
             st.components.v1.html(folium_map._repr_html_(), height=500)
     except Exception as e:
-        st.error(f"Failed to display GIS data: {e}")
+        st.error("Failed to display GIS data.")
         return
-
+    
     # 予測モデルの作成とリスク予測
     st.header("Risk Prediction")
     try:
@@ -107,13 +162,13 @@ def main():
             risk_score = predict_risk(model, input_features)
         st.write(f"Predicted Risk Score: **{risk_score:.2f}**")
     except Exception as e:
-        st.error(f"Failed to predict risk: {e}")
+        st.error("Failed to predict risk.")
         return
-
+    
     # PDFレポート生成
     st.header("PDF Report Generation")
-    if st.button("Generate PDF Report"):
-        try:
+    try:
+        if st.button("Generate PDF Report"):
             pdf_buffer = generate_pdf_report(risk_score)
             st.download_button(
                 label="Download PDF Report",
@@ -121,8 +176,8 @@ def main():
                 file_name="kamijima_pipeline_safety_report.pdf",
                 mime="application/pdf"
             )
-        except Exception as e:
-            st.error(f"Failed to generate PDF report: {e}")
+    except Exception as e:
+        st.error("Failed to generate PDF report.")
 
 if __name__ == "__main__":
     main()
