@@ -7,80 +7,95 @@ import io
 from reportlab.pdfgen import canvas
 from shapely.geometry import Polygon, LineString
 
-# ----- 1. GISデータの生成（疑似データ：愛媛県上島町中央付近） -----
+# ----- 1. GISデータの生成（疑似データ：上島町中央付近の広域領域と上下水道管） -----
 @st.cache_data(show_spinner=False)
 def create_sample_gis_data():
     """
-    上島町中央付近に、疑似的な土壌の性質（左右2領域）とパイプライン（中央を横断するライン）を生成する。
+    広い領域（例：経度 133.190～133.220、緯度 34.245～34.270）を表す土壌領域ポリゴンと、
+    2種類の曲折した上下水道管（Water Supply と Sewer）を生成する。
     """
     try:
-        # 土壌ポリゴンの作成
-        # 土壌ポリゴン A: 左側（例：Sandy）
-        coords_A = [
-            (132.495, 33.847),  # 左下
-            (132.500, 33.847),  # 右下
-            (132.500, 33.853),  # 右上
-            (132.495, 33.853)   # 左上
+        # 土壌領域ポリゴンの作成（全域）
+        soil_coords = [
+            (133.190, 34.245),  # 左下
+            (133.220, 34.245),  # 右下
+            (133.220, 34.270),  # 右上
+            (133.190, 34.270)   # 左上
         ]
-        poly_A = Polygon(coords_A)
-        # 土壌ポリゴン B: 右側（例：Clay）
-        coords_B = [
-            (132.500, 33.847),
-            (132.505, 33.847),
-            (132.505, 33.853),
-            (132.500, 33.853)
+        soil_poly = Polygon(soil_coords)
+        gdf_soil = gpd.GeoDataFrame({'soil': ['Sample Soil']}, geometry=[soil_poly], crs="EPSG:4326")
+        
+        # パイプラインの作成（曲折したライン）
+        # 水道管：左下から右上方向へ、上昇しながら曲がる
+        water_supply_coords = [
+            (133.192, 34.248),
+            (133.200, 34.252),
+            (133.205, 34.257),
+            (133.210, 34.262),
+            (133.215, 34.266),
+            (133.218, 34.268)
         ]
-        poly_B = Polygon(coords_B)
-        # 土壌GeoDataFrameの作成
-        gdf_soil = gpd.GeoDataFrame(
-            {'soil_type': ['Sandy', 'Clay']},
-            geometry=[poly_A, poly_B],
+        water_supply_line = LineString(water_supply_coords)
+        
+        # 下水管：右下から左上方向へ、下降しながら曲がる
+        sewer_coords = [
+            (133.218, 34.248),
+            (133.213, 34.252),
+            (133.208, 34.257),
+            (133.203, 34.262),
+            (133.198, 34.266),
+            (133.193, 34.268)
+        ]
+        sewer_line = LineString(sewer_coords)
+        
+        gdf_pipelines = gpd.GeoDataFrame(
+            {
+                'pipeline_type': ['Water Supply', 'Sewer']
+            },
+            geometry=[water_supply_line, sewer_line],
             crs="EPSG:4326"
         )
-        # パイプラインの作成：土壌ポリゴンの中央部を横断するライン
-        # ここでは、土壌全体の左端から右端までの水平ラインとする
-        pipeline_coords = [(132.495, 33.85), (132.505, 33.85)]
-        pipeline_line = LineString(pipeline_coords)
-        gdf_pipeline = gpd.GeoDataFrame(
-            {'pipeline': ['Main Pipeline']},
-            geometry=[pipeline_line],
-            crs="EPSG:4326"
-        )
-        return gdf_soil, gdf_pipeline
+        
+        return gdf_soil, gdf_pipelines
     except Exception as e:
         st.error(f"Error in creating sample GIS data: {e}")
         raise
 
-def create_folium_map(gdf_soil, gdf_pipeline):
+def create_folium_map(gdf_soil, gdf_pipelines):
     """
-    土壌とパイプラインのGeoDataFrameからFoliumマップを作成する。
+    土壌領域ポリゴンと上下水道管のGeoDataFrameからFoliumマップを生成する。
+    土壌領域は薄い緑、Water Supply は青、Sewer はオレンジで表示する。
     """
     try:
-        # 土壌GeoDataFrameの重心をマップの中心に設定
+        # 土壌領域の中心をマップの中心に設定
         mean_lat = gdf_soil.geometry.centroid.y.mean()
         mean_lon = gdf_soil.geometry.centroid.x.mean()
         m = folium.Map(location=[mean_lat, mean_lon], zoom_start=14)
         
-        # 土壌情報をGeoJsonレイヤーとして追加（土壌種別に応じた色分け）
+        # 土壌領域を追加（薄い緑色）
         folium.GeoJson(
             gdf_soil,
-            name="Soil Properties",
+            name="Soil Area",
             style_function=lambda feature: {
-                'fillColor': 'green' if feature['properties']['soil_type'] == 'Sandy' else 'brown',
-                'color': 'black',
-                'weight': 1,
-                'fillOpacity': 0.5
+                'fillColor': 'lightgreen',
+                'color': 'green',
+                'weight': 2,
+                'fillOpacity': 0.3
             }
         ).add_to(m)
         
-        # パイプライン情報をGeoJsonレイヤーとして追加
+        # 上下水道管の追加
+        def pipeline_style(feature):
+            if feature['properties']['pipeline_type'] == 'Water Supply':
+                return {'color': 'blue', 'weight': 4}
+            else:
+                return {'color': 'orange', 'weight': 4}
+        
         folium.GeoJson(
-            gdf_pipeline,
-            name="Pipeline",
-            style_function=lambda feature: {
-                'color': 'red',
-                'weight': 3
-            }
+            gdf_pipelines,
+            name="Pipelines",
+            style_function=pipeline_style,
+            tooltip=folium.features.GeoJsonTooltip(fields=['pipeline_type'], aliases=["Type:"])
         ).add_to(m)
         
         folium.LayerControl().add_to(m)
@@ -146,8 +161,8 @@ def main():
     st.header("GIS Visualization (Kamijima Area)")
     try:
         with st.spinner("Generating GIS data..."):
-            gdf_soil, gdf_pipeline = create_sample_gis_data()
-            folium_map = create_folium_map(gdf_soil, gdf_pipeline)
+            gdf_soil, gdf_pipelines = create_sample_gis_data()
+            folium_map = create_folium_map(gdf_soil, gdf_pipelines)
             st.components.v1.html(folium_map._repr_html_(), height=500)
     except Exception as e:
         st.error("Failed to display GIS data.")
