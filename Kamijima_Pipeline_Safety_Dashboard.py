@@ -11,11 +11,14 @@ from shapely.geometry import Polygon, LineString
 import tempfile, zipfile
 import os
 
-# ReportLab用に日本語フォントを登録（同じディレクトリに NotoSansCJKjp-Regular.otf が必要）
+# --- フォント登録 ---
+# 日本語フォント "NotoSansCJKjp-Regular.otf" をスクリプトと同じディレクトリに配置してください。
 try:
     pdfmetrics.registerFont(TTFont('NotoSansCJKjp', 'NotoSansCJKjp-Regular.otf'))
+    FONT_NAME = "NotoSansCJKjp"
 except Exception as e:
-    st.error(f"日本語フォントの登録に失敗しました: {e}")
+    st.error("日本語フォントの登録に失敗しました。ファイル 'NotoSansCJKjp-Regular.otf' が正しい場所にあるか確認してください。")
+    FONT_NAME = "Helvetica"  # フォールバック（※日本語は正しく表示されません）
 
 # ----- 1. GISデータの生成（疑似データ：上島町中央付近の広域領域と上下水道管） -----
 @st.cache_data(show_spinner=False)
@@ -74,12 +77,10 @@ def create_folium_map(gdf_soil, gdf_pipelines):
     土壌領域は薄い緑色、"水道管"は青、"下水管"はオレンジで表示する。
     """
     try:
-        # 土壌領域の中心をマップの中心に設定
         mean_lat = gdf_soil.geometry.centroid.y.mean()
         mean_lon = gdf_soil.geometry.centroid.x.mean()
         m = folium.Map(location=[mean_lat, mean_lon], zoom_start=14)
         
-        # 土壌領域を追加
         folium.GeoJson(
             gdf_soil,
             name="土壌領域",
@@ -91,7 +92,6 @@ def create_folium_map(gdf_soil, gdf_pipelines):
             }
         ).add_to(m)
         
-        # 上下水道管の追加
         def pipeline_style(feature):
             if feature['properties']['pipeline_type'] == '水道管':
                 return {'color': 'blue', 'weight': 4}
@@ -125,7 +125,6 @@ def load_gis_file(uploaded_file):
                     f.write(uploaded_file.getbuffer())
                 with zipfile.ZipFile(zip_path, "r") as z:
                     z.extractall(tmpdir)
-                # 拡張子 .shp のファイルを検索
                 shp_files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")]
                 if len(shp_files) > 0:
                     gdf = gpd.read_file(shp_files[0])
@@ -134,7 +133,6 @@ def load_gis_file(uploaded_file):
                     st.error("Zipファイル内に有効なShapefileが見つかりませんでした。")
                     return None
         else:
-            # GeoJSON または JSON の場合
             gdf = gpd.read_file(uploaded_file)
             return gdf
     except Exception as e:
@@ -167,15 +165,14 @@ def predict_risk(model, input_features):
 def generate_pdf_report(risk_score):
     """
     予測されたリスクスコアを含むPDFレポートを生成する。
-    日本語表示のため、登録した NotoSansCJKjp フォントを使用する。
+    日本語表示のため、登録したフォント（FONT_NAME）を使用する。
     """
     try:
         buffer = io.BytesIO()
         p = canvas.Canvas(buffer)
-        # フォントを NotoSansCJKjp に設定
-        p.setFont("NotoSansCJKjp", 16)
+        p.setFont(FONT_NAME, 16)
         p.drawString(100, 800, "上島町パイプライン安全レポート")
-        p.setFont("NotoSansCJKjp", 12)
+        p.setFont(FONT_NAME, 12)
         p.drawString(100, 780, "所在地：上島町、愛媛県")
         p.drawString(100, 760, f"予測リスクスコア： {risk_score:.2f}")
         p.drawString(100, 740, "注：これはサンプルデータによるテストレポートです。")
@@ -223,7 +220,6 @@ def main():
                     gdf_soil, gdf_pipelines = create_sample_gis_data()
                     folium_map = create_folium_map(gdf_soil, gdf_pipelines)
                 else:
-                    # アップロードデータの場合は、読み込んだデータをそのまま表示
                     folium_map = folium.Map(location=[34.25782859672118, 133.20487255560406], zoom_start=14)
                     folium.GeoJson(
                         gdf_uploaded,
