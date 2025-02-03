@@ -10,15 +10,15 @@ from reportlab.pdfbase.ttfonts import TTFont
 from shapely.geometry import Polygon, LineString
 import tempfile, zipfile
 import os
+import pandas as pd
 
 # --- フォント登録 ---
-# 日本語フォント "NotoSansCJKjp-Regular.otf" をスクリプトと同じディレクトリに配置してください。
 try:
     pdfmetrics.registerFont(TTFont('NotoSansCJKjp', 'NotoSansCJKjp-Regular.otf'))
     FONT_NAME = "NotoSansCJKjp"
 except Exception as e:
-    st.error("日本語フォントの登録に失敗しました。ファイル 'NotoSansCJKjp-Regular.otf' が正しい場所にあるか確認してください。")
-    FONT_NAME = "Helvetica"  # フォールバック（※日本語は正しく表示されません）
+    st.error("日本語フォントの登録に失敗しました。ファイル 'NotoSansCJKjp-Regular.otf' の配置を確認してください。")
+    FONT_NAME = "Helvetica"  # フォールバック
 
 # ----- 1. GISデータの生成（疑似データ：上島町中央付近の広域領域と上下水道管） -----
 @st.cache_data(show_spinner=False)
@@ -28,7 +28,7 @@ def create_sample_gis_data():
     2種類の曲折した上下水道管（水道管と下水管）を生成する。
     """
     try:
-        # 土壌領域ポリゴンの作成（全域）
+        # 土壌領域ポリゴンの作成
         soil_coords = [
             (133.190, 34.245),  # 左下
             (133.220, 34.245),  # 右下
@@ -38,7 +38,7 @@ def create_sample_gis_data():
         soil_poly = Polygon(soil_coords)
         gdf_soil = gpd.GeoDataFrame({'soil': ['サンプル土壌']}, geometry=[soil_poly], crs="EPSG:4326")
         
-        # 水道管：左下から右上へ曲がりながら上昇するライン
+        # 水道管：左下から右上へ、曲折しながら上昇するライン
         water_supply_coords = [
             (133.192, 34.248),
             (133.200, 34.252),
@@ -49,7 +49,7 @@ def create_sample_gis_data():
         ]
         water_supply_line = LineString(water_supply_coords)
         
-        # 下水管：右下から左上へ曲がりながら下降するライン
+        # 下水管：右下から左上へ、曲折しながら下降するライン
         sewer_coords = [
             (133.218, 34.248),
             (133.213, 34.252),
@@ -74,7 +74,7 @@ def create_sample_gis_data():
 def create_folium_map(gdf_soil, gdf_pipelines):
     """
     土壌領域ポリゴンと上下水道管のGeoDataFrameからFoliumマップを生成する。
-    土壌領域は薄い緑色、"水道管"は青、"下水管"はオレンジで表示する。
+    土壌領域は薄い緑、"水道管"は青、"下水管"はオレンジで表示する。
     """
     try:
         mean_lat = gdf_soil.geometry.centroid.y.mean()
@@ -139,9 +139,32 @@ def load_gis_file(uploaded_file):
         st.error(f"施設データ読み込みエラー: {e}")
         return None
 
-# ----- 2. 機械学習モデルによる予測（ダミーデータ） -----
+# ----- リスク予測用トレーニングデータの読み込み -----
+def load_training_data(uploaded_file):
+    """
+    アップロードされたCSVファイルから、リスク予測用のトレーニングデータを読み込む。
+    必要な列: "years", "deterioration", "soil_corrosiveness", "pressure", "flow", "risk"
+    """
+    try:
+        df = pd.read_csv(uploaded_file)
+        required_cols = {"years", "deterioration", "soil_corrosiveness", "pressure", "flow", "risk"}
+        if not required_cols.issubset(set(df.columns)):
+            st.error("CSVファイルに必要な列がありません。必要な列: years, deterioration, soil_corrosiveness, pressure, flow, risk")
+            return None, None
+        X = df[["years", "deterioration", "soil_corrosiveness", "pressure", "flow"]].values
+        y = df["risk"].values
+        return X, y
+    except Exception as e:
+        st.error(f"トレーニングデータ読み込みエラー: {e}")
+        return None, None
+
+# ----- 2. 機械学習モデルによるリスク予測 -----
 @st.cache_resource(show_spinner=False)
 def train_dummy_model():
+    """
+    ダミーデータを用いてRandomForestRegressorを学習する。
+    ※実際の運用時は、トレーニングデータCSVからモデルを学習してください。
+    """
     try:
         np.random.seed(42)
         X_train = np.random.rand(100, 5)
@@ -151,6 +174,19 @@ def train_dummy_model():
         return model
     except Exception as e:
         st.error(f"ダミーモデル学習エラー: {e}")
+        raise
+
+@st.cache_resource(show_spinner=False)
+def train_model_from_data(X, y):
+    """
+    アップロードされたトレーニングデータを用いてRandomForestRegressorを学習する。
+    """
+    try:
+        model = RandomForestRegressor()
+        model.fit(X, y)
+        return model
+    except Exception as e:
+        st.error(f"モデル学習エラー: {e}")
         raise
 
 def predict_risk(model, input_features):
@@ -175,7 +211,7 @@ def generate_pdf_report(risk_score):
         p.setFont(FONT_NAME, 12)
         p.drawString(100, 780, "所在地：上島町、愛媛県")
         p.drawString(100, 760, f"予測リスクスコア： {risk_score:.2f}")
-        p.drawString(100, 740, "注：これはサンプルデータによるテストレポートです。")
+        p.drawString(100, 740, "注：これは実際のデータを用いたテストレポートです。")
         p.showPage()
         p.save()
         buffer.seek(0)
@@ -189,12 +225,23 @@ def main():
     st.title("上島町パイプライン安全ダッシュボード")
     
     # サイドバー：入力パラメータ（5特徴量）
+    # ※以下は正規化された値（0～1）として入力してください。
     st.sidebar.header("入力パラメータ（5特徴量）")
     feature_values = []
-    for i in range(5):
-        val = st.sidebar.slider(f"特徴量 {i+1}", 0.0, 1.0, 0.5, 0.01)
+    feature_labels = [
+        "管の使用年数（正規化値）",
+        "管の材質劣化指数（正規化値）",
+        "土壌腐食性（正規化値）",
+        "運転圧力（正規化値）",
+        "流量（正規化値）"
+    ]
+    for label in feature_labels:
+        val = st.sidebar.slider(label, 0.0, 1.0, 0.5, 0.01)
         feature_values.append(val)
     input_features = np.array(feature_values).reshape(1, -1)
+    
+    # サイドバー：リスク予測用トレーニングデータのアップロード（CSV形式）
+    training_file = st.sidebar.file_uploader("リスク予測用のトレーニングデータをアップロードしてください（CSV形式）", type=["csv"])
     
     # サイドバー：施設データのアップロード（GeoJSON, JSON, Zip形式）
     uploaded_file = st.sidebar.file_uploader("施設データをアップロードしてください（GeoJSON、JSON、またはZip形式）", type=["geojson", "json", "zip"])
@@ -235,8 +282,19 @@ def main():
     # 予測モデルの作成とリスク予測
     st.header("リスク予測")
     try:
-        with st.spinner("ダミーモデルを学習中..."):
-            model = train_dummy_model()
+        # トレーニングデータがアップロードされていれば、実データからモデルを学習
+        if training_file is not None:
+            with st.spinner("トレーニングデータを読み込み中..."):
+                X_train, y_train = load_training_data(training_file)
+            if X_train is not None:
+                with st.spinner("モデルを学習中..."):
+                    model = train_model_from_data(X_train, y_train)
+            else:
+                st.error("トレーニングデータの読み込みに失敗しました。ダミーモデルを使用します。")
+                model = train_dummy_model()
+        else:
+            with st.spinner("ダミーモデルを学習中..."):
+                model = train_dummy_model()
         with st.spinner("リスクを予測中..."):
             risk_score = predict_risk(model, input_features)
         st.write(f"予測されたリスクスコア： **{risk_score:.2f}**")
