@@ -13,12 +13,17 @@ import os
 import pandas as pd
 
 # --- フォント登録 ---
-try:
-    pdfmetrics.registerFont(TTFont('NotoSansCJKjp', 'NotoSansCJKjp-Regular.otf'))
-    FONT_NAME = "NotoSansCJKjp"
-except Exception as e:
-    st.error("日本語フォントの登録に失敗しました。ファイル 'NotoSansCJKjp-Regular.otf' の配置を確認してください。")
-    FONT_NAME = "Helvetica"  # フォールバック
+FONT_FILE = "NotoSansCJKjp-Regular.otf"
+if os.path.exists(FONT_FILE):
+    try:
+        pdfmetrics.registerFont(TTFont('NotoSansCJKjp', FONT_FILE))
+        FONT_NAME = "NotoSansCJKjp"
+    except Exception as e:
+        st.warning("日本語フォントの登録に失敗しました。フォールバックとしてHelveticaを使用します。")
+        FONT_NAME = "Helvetica"
+else:
+    st.warning(f"日本語フォントファイル '{FONT_FILE}' が見つかりません。フォールバックとしてHelveticaを使用します。")
+    FONT_NAME = "Helvetica"
 
 # ----- 1. GISデータの生成（疑似データ：上島町中央付近の広域領域と上下水道管） -----
 @st.cache_data(show_spinner=False)
@@ -224,20 +229,20 @@ def generate_pdf_report(risk_score):
 def main():
     st.title("上島町パイプライン安全ダッシュボード")
     
-    # サイドバー：入力パラメータ（5特徴量）
-    # ※以下は正規化された値（0～1）として入力してください。
+    # サイドバー：入力パラメータ（5特徴量）の設定（ドラッグオーバーで説明表示）
     st.sidebar.header("入力パラメータ（5特徴量）")
     feature_values = []
-    feature_labels = [
-        "管の使用年数（正規化値）",
-        "管の材質劣化指数（正規化値）",
-        "土壌腐食性（正規化値）",
-        "運転圧力（正規化値）",
-        "流量（正規化値）"
-    ]
-    for label in feature_labels:
-        val = st.sidebar.slider(label, 0.0, 1.0, 0.5, 0.01)
-        feature_values.append(val)
+    # 各特徴量のスライダーに help パラメータを追加
+    feature_values.append(st.sidebar.slider("管の使用年数（正規化値）", 0.0, 1.0, 0.5, 0.01,
+                                            help="新品なら0、耐用年数に近づくほど1に近い値。"))
+    feature_values.append(st.sidebar.slider("管の材質劣化指数（正規化値）", 0.0, 1.0, 0.5, 0.01,
+                                            help="劣化がない場合は0、著しい劣化の場合は1に近い値。"))
+    feature_values.append(st.sidebar.slider("土壌腐食性（正規化値）", 0.0, 1.0, 0.5, 0.01,
+                                            help="腐食性が低い場合は0、高い場合は1に近い値。"))
+    feature_values.append(st.sidebar.slider("運転圧力（正規化値）", 0.0, 1.0, 0.5, 0.01,
+                                            help="低圧なら0、高圧なら1に近い値。"))
+    feature_values.append(st.sidebar.slider("流量（正規化値）", 0.0, 1.0, 0.5, 0.01,
+                                            help="低流量なら0、高流量なら1に近い値。"))
     input_features = np.array(feature_values).reshape(1, -1)
     
     # サイドバー：リスク予測用トレーニングデータのアップロード（CSV形式）
@@ -297,7 +302,7 @@ def main():
                 model = train_dummy_model()
         with st.spinner("リスクを予測中..."):
             risk_score = predict_risk(model, input_features)
-        st.write(f"予測されたリスクスコア： **{risk_score:.2f}**")
+        # ※テスト結果の表示は省略
     except Exception as e:
         st.error("リスクの予測に失敗しました。")
         return
