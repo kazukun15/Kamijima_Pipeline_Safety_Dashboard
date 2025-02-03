@@ -6,13 +6,15 @@ from sklearn.ensemble import RandomForestRegressor
 import io
 from reportlab.pdfgen import canvas
 from shapely.geometry import Polygon, LineString
+import tempfile, zipfile
+import os
 
 # ----- 1. GISデータの生成（疑似データ：上島町中央付近の広域領域と上下水道管） -----
 @st.cache_data(show_spinner=False)
 def create_sample_gis_data():
     """
-    広い領域（例：経度 133.190～133.220、緯度 34.245～34.270）を表す土壌領域ポリゴンと、
-    2種類の曲折した上下水道管（Water Supply と Sewer）を生成する。
+    広い領域（経度 133.190～133.220、緯度 34.245～34.270）を表す土壌領域ポリゴンと、
+    2種類の曲折した上下水道管（水道管と下水管）を生成する。
     """
     try:
         # 土壌領域ポリゴンの作成（全域）
@@ -23,10 +25,9 @@ def create_sample_gis_data():
             (133.190, 34.270)   # 左上
         ]
         soil_poly = Polygon(soil_coords)
-        gdf_soil = gpd.GeoDataFrame({'soil': ['Sample Soil']}, geometry=[soil_poly], crs="EPSG:4326")
+        gdf_soil = gpd.GeoDataFrame({'soil': ['サンプル土壌']}, geometry=[soil_poly], crs="EPSG:4326")
         
-        # パイプラインの作成（曲折したライン）
-        # 水道管：左下から右上方向へ、上昇しながら曲がる
+        # 水道管：左下から右上へ曲がりながら上昇するライン
         water_supply_coords = [
             (133.192, 34.248),
             (133.200, 34.252),
@@ -37,7 +38,7 @@ def create_sample_gis_data():
         ]
         water_supply_line = LineString(water_supply_coords)
         
-        # 下水管：右下から左上方向へ、下降しながら曲がる
+        # 下水管：右下から左上へ曲がりながら下降するライン
         sewer_coords = [
             (133.218, 34.248),
             (133.213, 34.252),
@@ -49,22 +50,20 @@ def create_sample_gis_data():
         sewer_line = LineString(sewer_coords)
         
         gdf_pipelines = gpd.GeoDataFrame(
-            {
-                'pipeline_type': ['Water Supply', 'Sewer']
-            },
+            {'pipeline_type': ['水道管', '下水管']},
             geometry=[water_supply_line, sewer_line],
             crs="EPSG:4326"
         )
         
         return gdf_soil, gdf_pipelines
     except Exception as e:
-        st.error(f"Error in creating sample GIS data: {e}")
+        st.error(f"GISデータ生成エラー: {e}")
         raise
 
 def create_folium_map(gdf_soil, gdf_pipelines):
     """
     土壌領域ポリゴンと上下水道管のGeoDataFrameからFoliumマップを生成する。
-    土壌領域は薄い緑、Water Supply は青、Sewer はオレンジで表示する。
+    土壌領域は薄い緑色、"水道管"は青、"下水管"はオレンジで表示する。
     """
     try:
         # 土壌領域の中心をマップの中心に設定
@@ -72,10 +71,10 @@ def create_folium_map(gdf_soil, gdf_pipelines):
         mean_lon = gdf_soil.geometry.centroid.x.mean()
         m = folium.Map(location=[mean_lat, mean_lon], zoom_start=14)
         
-        # 土壌領域を追加（薄い緑色）
+        # 土壌領域を追加
         folium.GeoJson(
             gdf_soil,
-            name="Soil Area",
+            name="土壌領域",
             style_function=lambda feature: {
                 'fillColor': 'lightgreen',
                 'color': 'green',
@@ -86,23 +85,53 @@ def create_folium_map(gdf_soil, gdf_pipelines):
         
         # 上下水道管の追加
         def pipeline_style(feature):
-            if feature['properties']['pipeline_type'] == 'Water Supply':
+            if feature['properties']['pipeline_type'] == '水道管':
                 return {'color': 'blue', 'weight': 4}
             else:
                 return {'color': 'orange', 'weight': 4}
         
         folium.GeoJson(
             gdf_pipelines,
-            name="Pipelines",
+            name="上下水道管",
             style_function=pipeline_style,
-            tooltip=folium.features.GeoJsonTooltip(fields=['pipeline_type'], aliases=["Type:"])
+            tooltip=folium.features.GeoJsonTooltip(fields=['pipeline_type'], aliases=["種類："])
         ).add_to(m)
         
         folium.LayerControl().add_to(m)
         return m
     except Exception as e:
-        st.error(f"Error in creating Folium map: {e}")
+        st.error(f"Foliumマップ生成エラー: {e}")
         raise
+
+# ----- 施設データの読み込み用関数 -----
+def load_gis_file(uploaded_file):
+    """
+    アップロードされた施設データ（GeoJSON、JSON、またはZip形式）を読み込み、GeoDataFrameを返す。
+    """
+    try:
+        filename = uploaded_file.name
+        if filename.endswith(".zip"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                zip_path = os.path.join(tmpdir, filename)
+                with open(zip_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                with zipfile.ZipFile(zip_path, "r") as z:
+                    z.extractall(tmpdir)
+                # 拡張子 .shp のファイルを検索
+                shp_files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")]
+                if len(shp_files) > 0:
+                    gdf = gpd.read_file(shp_files[0])
+                    return gdf
+                else:
+                    st.error("Zipファイル内に有効なShapefileが見つかりませんでした。")
+                    return None
+        else:
+            # GeoJSON または JSON の場合
+            gdf = gpd.read_file(uploaded_file)
+            return gdf
+    except Exception as e:
+        st.error(f"施設データ読み込みエラー: {e}")
+        return None
 
 # ----- 2. 機械学習モデルによる予測（ダミーデータ） -----
 @st.cache_resource(show_spinner=False)
@@ -115,7 +144,7 @@ def train_dummy_model():
         model.fit(X_train, y_train)
         return model
     except Exception as e:
-        st.error(f"Error in training dummy model: {e}")
+        st.error(f"ダミーモデル学習エラー: {e}")
         raise
 
 def predict_risk(model, input_features):
@@ -123,7 +152,7 @@ def predict_risk(model, input_features):
         risk_score = model.predict(input_features)
         return risk_score[0]
     except Exception as e:
-        st.error(f"Error in predicting risk: {e}")
+        st.error(f"リスク予測エラー: {e}")
         raise
 
 # ----- 3. PDFレポート生成 -----
@@ -132,67 +161,93 @@ def generate_pdf_report(risk_score):
         buffer = io.BytesIO()
         p = canvas.Canvas(buffer)
         p.setFont("Helvetica-Bold", 16)
-        p.drawString(100, 800, "Kamijima Pipeline Safety Report")
+        p.drawString(100, 800, "上島町パイプライン安全レポート")
         p.setFont("Helvetica", 12)
-        p.drawString(100, 780, "Location: Kamijima, Ehime, Japan")
-        p.drawString(100, 760, f"Predicted Risk Score: {risk_score:.2f}")
-        p.drawString(100, 740, "Note: This is a test report using sample data.")
+        p.drawString(100, 780, "所在地：上島町、愛媛県")
+        p.drawString(100, 760, f"予測リスクスコア： {risk_score:.2f}")
+        p.drawString(100, 740, "注：これはサンプルデータによるテストレポートです。")
         p.showPage()
         p.save()
         buffer.seek(0)
         return buffer
     except Exception as e:
-        st.error(f"Error in generating PDF report: {e}")
+        st.error(f"PDFレポート生成エラー: {e}")
         raise
 
 # ----- 4. Streamlitアプリ本体 -----
 def main():
-    st.title("Kamijima Pipeline Safety Dashboard")
+    st.title("上島町パイプライン安全ダッシュボード")
     
     # サイドバー：入力パラメータ（5特徴量）
-    st.sidebar.header("Input Parameters (5 Features)")
+    st.sidebar.header("入力パラメータ（5特徴量）")
     feature_values = []
     for i in range(5):
-        val = st.sidebar.slider(f"Feature {i+1}", 0.0, 1.0, 0.5, 0.01)
+        val = st.sidebar.slider(f"特徴量 {i+1}", 0.0, 1.0, 0.5, 0.01)
         feature_values.append(val)
     input_features = np.array(feature_values).reshape(1, -1)
     
+    # サイドバー：施設データのアップロード（GeoJSON, JSON, Zip形式）
+    uploaded_file = st.sidebar.file_uploader("施設データをアップロードしてください（GeoJSON、JSON、またはZip形式）", type=["geojson", "json", "zip"])
+    
+    # サイドバー：表示するGISデータの選択
+    if uploaded_file is not None:
+        data_option = st.sidebar.radio("表示するGISデータを選択してください", options=["サンプルデータ", "アップロードデータ"])
+    else:
+        data_option = "サンプルデータ"
+    
     # GISデータの生成とFoliumマップ表示
-    st.header("GIS Visualization (Kamijima Area)")
+    st.header("GIS表示（上島町エリア）")
     try:
-        with st.spinner("Generating GIS data..."):
-            gdf_soil, gdf_pipelines = create_sample_gis_data()
-            folium_map = create_folium_map(gdf_soil, gdf_pipelines)
-            st.components.v1.html(folium_map._repr_html_(), height=500)
+        if data_option == "サンプルデータ":
+            with st.spinner("サンプルデータを生成中..."):
+                gdf_soil, gdf_pipelines = create_sample_gis_data()
+                folium_map = create_folium_map(gdf_soil, gdf_pipelines)
+        else:
+            with st.spinner("施設データを読み込み中..."):
+                gdf_uploaded = load_gis_file(uploaded_file)
+                if gdf_uploaded is None:
+                    st.error("施設データの読み込みに失敗しました。サンプルデータを表示します。")
+                    gdf_soil, gdf_pipelines = create_sample_gis_data()
+                    folium_map = create_folium_map(gdf_soil, gdf_pipelines)
+                else:
+                    # アップロードデータの場合、デフォルトのスタイルで表示
+                    folium_map = folium.Map(location=[34.25782859672118, 133.20487255560406], zoom_start=14)
+                    folium.GeoJson(
+                        gdf_uploaded,
+                        name="アップロードデータ",
+                        tooltip=folium.features.GeoJsonTooltip(fields=list(gdf_uploaded.columns))
+                    ).add_to(folium_map)
+                    folium.LayerControl().add_to(folium_map)
+        st.components.v1.html(folium_map._repr_html_(), height=500)
     except Exception as e:
-        st.error("Failed to display GIS data.")
+        st.error("GISデータの表示に失敗しました。")
         return
     
     # 予測モデルの作成とリスク予測
-    st.header("Risk Prediction")
+    st.header("リスク予測")
     try:
-        with st.spinner("Training dummy model..."):
+        with st.spinner("ダミーモデルを学習中..."):
             model = train_dummy_model()
-        with st.spinner("Predicting risk..."):
+        with st.spinner("リスクを予測中..."):
             risk_score = predict_risk(model, input_features)
-        st.write(f"Predicted Risk Score: **{risk_score:.2f}**")
+        st.write(f"予測されたリスクスコア： **{risk_score:.2f}**")
     except Exception as e:
-        st.error("Failed to predict risk.")
+        st.error("リスクの予測に失敗しました。")
         return
     
     # PDFレポート生成
-    st.header("PDF Report Generation")
+    st.header("PDFレポート生成")
     try:
-        if st.button("Generate PDF Report"):
+        if st.button("PDFレポートを生成"):
             pdf_buffer = generate_pdf_report(risk_score)
             st.download_button(
-                label="Download PDF Report",
+                label="PDFレポートをダウンロード",
                 data=pdf_buffer,
                 file_name="kamijima_pipeline_safety_report.pdf",
                 mime="application/pdf"
             )
     except Exception as e:
-        st.error("Failed to generate PDF report.")
+        st.error("PDFレポートの生成に失敗しました。")
 
 if __name__ == "__main__":
     main()
