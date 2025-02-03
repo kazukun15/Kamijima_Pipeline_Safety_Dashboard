@@ -119,17 +119,20 @@ def create_folium_map(gdf_soil, gdf_pipelines):
 # ----- 施設データの読み込み用関数 -----
 def load_gis_file(uploaded_file):
     """
-    アップロードされた施設データ（GeoJSON、JSON、またはZip形式）を読み込み、GeoDataFrameを返す。
+    アップロードされた施設データを読み込み、GeoDataFrameを返す。
+    対応形式: GeoJSON, JSON, KML, GML, SHP, ZIP（Shapefile一式）
     """
     try:
-        filename = uploaded_file.name
-        if filename.endswith(".zip"):
+        filename = uploaded_file.name.lower()
+        ext = os.path.splitext(filename)[1]
+        if ext == ".zip":
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_path = os.path.join(tmpdir, filename)
                 with open(zip_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
                 with zipfile.ZipFile(zip_path, "r") as z:
                     z.extractall(tmpdir)
+                # 拡張子 .shp のファイルを検索
                 shp_files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".shp")]
                 if len(shp_files) > 0:
                     gdf = gpd.read_file(shp_files[0])
@@ -137,9 +140,12 @@ def load_gis_file(uploaded_file):
                 else:
                     st.error("Zipファイル内に有効なShapefileが見つかりませんでした。")
                     return None
-        else:
+        elif ext in [".geojson", ".json", ".kml", ".gml", ".shp"]:
             gdf = gpd.read_file(uploaded_file)
             return gdf
+        else:
+            st.error("対応していないファイル形式です。対応形式: GeoJSON, JSON, KML, GML, SHP, ZIP")
+            return None
     except Exception as e:
         st.error(f"施設データ読み込みエラー: {e}")
         return None
@@ -229,10 +235,9 @@ def generate_pdf_report(risk_score):
 def main():
     st.title("上島町パイプライン安全ダッシュボード")
     
-    # サイドバー：入力パラメータ（5特徴量）の設定（ドラッグオーバーで説明表示）
+    # サイドバー：入力パラメータ（5特徴量）の設定（説明付き）
     st.sidebar.header("入力パラメータ（5特徴量）")
     feature_values = []
-    # 各特徴量のスライダーに help パラメータを追加
     feature_values.append(st.sidebar.slider("管の使用年数（正規化値）", 0.0, 1.0, 0.5, 0.01,
                                             help="新品なら0、耐用年数に近づくほど1に近い値。"))
     feature_values.append(st.sidebar.slider("管の材質劣化指数（正規化値）", 0.0, 1.0, 0.5, 0.01,
@@ -248,8 +253,9 @@ def main():
     # サイドバー：リスク予測用トレーニングデータのアップロード（CSV形式）
     training_file = st.sidebar.file_uploader("リスク予測用のトレーニングデータをアップロードしてください（CSV形式）", type=["csv"])
     
-    # サイドバー：施設データのアップロード（GeoJSON, JSON, Zip形式）
-    uploaded_file = st.sidebar.file_uploader("施設データをアップロードしてください（GeoJSON、JSON、またはZip形式）", type=["geojson", "json", "zip"])
+    # サイドバー：施設データのアップロード（GeoJSON, JSON, KML, GML, SHP, ZIP形式）
+    uploaded_file = st.sidebar.file_uploader("施設データをアップロードしてください（GeoJSON、JSON、KML、GML、SHP、またはZip形式）", 
+                                               type=["geojson", "json", "kml", "gml", "shp", "zip"])
     
     # サイドバー：表示するGISデータの選択
     if uploaded_file is not None:
@@ -287,7 +293,6 @@ def main():
     # 予測モデルの作成とリスク予測
     st.header("リスク予測")
     try:
-        # トレーニングデータがアップロードされていれば、実データからモデルを学習
         if training_file is not None:
             with st.spinner("トレーニングデータを読み込み中..."):
                 X_train, y_train = load_training_data(training_file)
@@ -302,7 +307,7 @@ def main():
                 model = train_dummy_model()
         with st.spinner("リスクを予測中..."):
             risk_score = predict_risk(model, input_features)
-        # ※テスト結果の表示は省略
+        # ※テスト結果（リスクスコア）の表示は省略
     except Exception as e:
         st.error("リスクの予測に失敗しました。")
         return
