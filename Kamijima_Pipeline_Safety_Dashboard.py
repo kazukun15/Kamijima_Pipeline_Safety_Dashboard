@@ -1,18 +1,26 @@
 import os
 import sys
 import chardet
-from PyQt5.QtWidgets import (
-    QApplication,
-    QMainWindow,
-    QVBoxLayout,
-    QPushButton,
-    QFileDialog,
-    QInputDialog,
-    QWidget,
-    QToolBar,
-    QAction,
-)
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+
+# PyQt5 のインポート時にエラーが出た場合、分かりやすいメッセージを表示して終了する
+try:
+    from PyQt5.QtWidgets import (
+        QApplication,
+        QMainWindow,
+        QVBoxLayout,
+        QPushButton,
+        QFileDialog,
+        QInputDialog,
+        QWidget,
+        QToolBar,
+        QAction,
+    )
+    from PyQt5.QtWebEngineWidgets import QWebEngineView
+except ModuleNotFoundError as e:
+    print("Error: PyQt5 または PyQtWebEngine がインストールされていません。")
+    print("以下のコマンドでインストールしてください:")
+    print("    pip install PyQt5 PyQtWebEngine")
+    sys.exit(1)
 
 
 class Kamijima_Pipeline_Safety_Dashboard(QMainWindow):
